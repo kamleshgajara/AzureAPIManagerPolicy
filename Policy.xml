@@ -20,6 +20,7 @@
             <when condition="@(!context.Variables.ContainsKey("introspectToken"))">
                 <!--Send request to Token Server to validate token (see RFC 7662) -->
                 <send-request mode="new" response-variable-name="tokenstate" timeout="20" ignore-error="true">
+                     <!--Change URL to your IDPs intospect URL and update Authorization to base64 clientid:secret value. -->
                     <set-url>https://youridp.com/as/introspect.oauth2</set-url>
                     <set-method>POST</set-method>
                     <set-header name="Authorization" exists-action="override">
