@@ -1,0 +1,73 @@
+<policies>
+    <inbound>
+        <!-- Extract Token from Authorization header parameter -->
+        <set-variable name="token" value="@(context.Request.Headers.GetValueOrDefault("Authorization","scheme param").Split(' ').Last())" />
+        <!-- Check if the token variable is empty or null and return 401 Unauthorized if that is the case -->
+        <choose>
+            <when condition="@(System.String.IsNullOrEmpty((string)context.Variables["token"]))">
+                <return-response response-variable-name="responseVariableName">
+                    <set-status code="401" reason="Unauthorized" />
+                    <set-header name="WWW-Authenticate" exists-action="override">
+                        <value>Bearer, error="invalid_token"</value>
+                    </set-header>
+                </return-response>
+            </when>
+        </choose>
+        <!-- Check if there is a previous value in the cache for this token -->
+        <cache-lookup-value key="@((string)context.Variables["token"])" variable-name="introspectToken" />
+        <choose>
+            <!-- If we don’t find it in the cache, make a request for it and store it -->
+            <when condition="@(!context.Variables.ContainsKey("introspectToken"))">
+                <!--Send request to Token Server to validate token (see RFC 7662) -->
+                <send-request mode="new" response-variable-name="tokenstate" timeout="20" ignore-error="true">
+                    <set-url>https://youridp.com/as/introspect.oauth2</set-url>
+                    <set-method>POST</set-method>
+                    <set-header name="Authorization" exists-action="override">
+                        <value>Basic base64(client_id:secret)</value>
+                    </set-header>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/x-www-form-urlencoded</value>
+                    </set-header>
+                    <set-body>@($"token={(string)context.Variables["token"]}")</set-body>
+                </send-request>
+                <!-- cache the response of the Token Server with the AT as the key -->
+                <cache-store-value key="@((string)context.Variables["token"])" value="@(((IResponse)context.Variables["tokenstate"]))" duration="@{
+                    var header = ((IResponse)context.Variables["tokenstate"]).Headers.GetValueOrDefault("Cache-Control","");
+                    var maxAge = Regex.Match(header, @"max-age=(?<maxAge>\d+)").Groups["maxAge"]?.Value;
+                    return (!string.IsNullOrEmpty(maxAge))?int.Parse(maxAge):300;
+                    }" />
+            </when>
+        </choose>
+        <!-- Query the cache for a value with key AT and store the data in a context variable "introspectToken" -->
+        <cache-lookup-value key="@((string)context.Variables["token"])" variable-name="introspectToken" />
+        <choose>
+            <!--Check active property in response -->
+            <when condition="@((bool)((IResponse)context.Variables["introspectToken"]).Body.As<JObject>()["active"] == false)">
+                <!-- active is equal to false, return 401 Unauthorized -->
+                <return-response response-variable-name="responseVariableName">
+                    <set-status code="401" reason="Unauthorized" />
+                    <set-header name="WWW-Authenticate" exists-action="override">
+                        <value>Bearer, error="invalid_token"</value>
+                    </set-header>
+                </return-response>
+            </when>
+            <otherwise>
+                <!-- Response contains active=true replace AT with JWT-->
+                <cache-lookup-value key="@((string)context.Variables["token"])" variable-name="introspectToken" />
+                <set-header name="Authorization" exists-action="override">
+                    <value>@($"Bearer {((IResponse)context.Variables["introspectToken"]).Body.As<JObject>()["jwt"]}")</value>
+                </set-header>
+            </otherwise>
+        </choose>
+        <base />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
